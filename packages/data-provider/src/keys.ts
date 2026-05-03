@@ -46,6 +46,7 @@ export enum QueryKeys {
   agentCategories = 'agentCategories',
   marketplaceAgents = 'marketplaceAgents',
   roles = 'roles',
+  rolesList = 'rolesList',
   conversationTags = 'conversationTags',
   health = 'health',
   userTerms = 'userTerms',
@@ -62,6 +63,22 @@ export enum QueryKeys {
   mcpServer = 'mcpServer',
   /* Active Jobs */
   activeJobs = 'activeJobs',
+  /* Agent API Keys */
+  agentApiKeys = 'agentApiKeys',
+  /* Skills */
+  skills = 'skills',
+  skill = 'skill',
+  skillFiles = 'skillFiles',
+  skillFileContent = 'skillFileContent',
+  /* Skill tree (phase 2 — filesystem-style node view) */
+  skillTree = 'skillTree',
+  skillNodeContent = 'skillNodeContent',
+  /* Skill favorites (star a skill in the sidebar) */
+  skillFavorites = 'skillFavorites',
+  /* Per-user skill active/inactive overrides */
+  skillStates = 'skillStates',
+  /* General user favorites */
+  favorites = 'favorites',
 }
 
 // Dynamic query keys that require parameters
@@ -70,6 +87,8 @@ export const DynamicQueryKeys = {
 } as const;
 
 export enum MutationKeys {
+  createAgentApiKey = 'createAgentApiKey',
+  deleteAgentApiKey = 'deleteAgentApiKey',
   fileUpload = 'fileUpload',
   fileDelete = 'fileDelete',
   updatePreset = 'updatePreset',
@@ -92,4 +111,10 @@ export enum MutationKeys {
   enableTwoFactor = 'enableTwoFactor',
   verifyTwoFactor = 'verifyTwoFactor',
   updateMemoryPreferences = 'updateMemoryPreferences',
+  /* Skill mutations from the original UI PR — tree/node operations are
+   * phase 2 and currently stubbed in the data-service layer. */
+  createSkillNode = 'createSkillNode',
+  updateSkillNode = 'updateSkillNode',
+  deleteSkillNode = 'deleteSkillNode',
+  updateSkillNodeContent = 'updateSkillNodeContent',
 }

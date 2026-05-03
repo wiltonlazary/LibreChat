@@ -1,13 +1,23 @@
 import { Dispatcher, ProxyAgent } from 'undici';
 import { logger } from '@librechat/data-schemas';
 import { AnthropicClientOptions } from '@librechat/agents';
-import { anthropicSettings, removeNullishValues, AuthKeys } from 'librechat-data-provider';
+import {
+  anthropicSettings,
+  removeNullishValues,
+  ThinkingDisplay,
+  AuthKeys,
+} from 'librechat-data-provider';
 import type {
   AnthropicLLMConfigResult,
   AnthropicConfigOptions,
   AnthropicCredentials,
 } from '~/types/anthropic';
-import { checkPromptCacheSupport, getClaudeHeaders, configureReasoning } from './helpers';
+import {
+  supportsAdaptiveThinking,
+  checkPromptCacheSupport,
+  configureReasoning,
+  getClaudeHeaders,
+} from './helpers';
 import {
   createAnthropicVertexClient,
   isAnthropicVertexCredentials,
@@ -78,20 +88,40 @@ function getLLMConfig(
   credentials: string | AnthropicCredentials | undefined,
   options: AnthropicConfigOptions = {},
 ): AnthropicLLMConfigResult {
+  /**
+   * Persisted agent `model_parameters` may round-trip `thinking` as the full
+   * Anthropic object `{ type: 'adaptive', display: 'omitted' }` rather than a
+   * boolean. Pull any `.display` out of it so an explicit user choice is not
+   * silently demoted to `'auto'` (which would then resolve to `'summarized'`
+   * on Opus 4.7+).
+   */
+  const persistedThinking = options.modelOptions?.thinking;
+  const persistedDisplay =
+    typeof persistedThinking === 'object' &&
+    persistedThinking != null &&
+    'display' in persistedThinking &&
+    typeof (persistedThinking as { display?: unknown }).display === 'string'
+      ? ((persistedThinking as { display: string }).display as ThinkingDisplay | string)
+      : undefined;
+
   const systemOptions = {
     thinking: options.modelOptions?.thinking ?? anthropicSettings.thinking.default,
     promptCache: options.modelOptions?.promptCache ?? anthropicSettings.promptCache.default,
     thinkingBudget:
       options.modelOptions?.thinkingBudget ?? anthropicSettings.thinkingBudget.default,
+    effort: options.modelOptions?.effort ?? anthropicSettings.effort.default,
+    thinkingDisplay:
+      options.modelOptions?.thinkingDisplay ??
+      persistedDisplay ??
+      anthropicSettings.thinkingDisplay.default,
   };
 
-  /** Couldn't figure out a way to still loop through the object while deleting the overlapping keys when porting this
-   * over from javascript, so for now they are being deleted manually until a better way presents itself.
-   */
   if (options.modelOptions) {
     delete options.modelOptions.thinking;
     delete options.modelOptions.promptCache;
     delete options.modelOptions.thinkingBudget;
+    delete options.modelOptions.effort;
+    delete options.modelOptions.thinkingDisplay;
   } else {
     throw new Error('No modelOptions provided');
   }
@@ -145,10 +175,33 @@ function getLLMConfig(
 
   requestOptions = configureReasoning(requestOptions, systemOptions);
 
-  if (!/claude-3[-.]7/.test(mergedOptions.model)) {
-    requestOptions.topP = mergedOptions.topP;
-    requestOptions.topK = mergedOptions.topK;
-  } else if (requestOptions.thinking == null) {
+  if (supportsAdaptiveThinking(mergedOptions.model)) {
+    if (
+      systemOptions.effort &&
+      (systemOptions.effort as string) !== '' &&
+      !requestOptions.invocationKwargs?.output_config
+    ) {
+      requestOptions.invocationKwargs = {
+        ...requestOptions.invocationKwargs,
+        output_config: { effort: systemOptions.effort },
+      };
+    }
+  } else {
+    if (
+      requestOptions.thinking != null &&
+      (requestOptions.thinking as unknown as { type: string }).type === 'adaptive'
+    ) {
+      delete requestOptions.thinking;
+    }
+    if (requestOptions.invocationKwargs?.output_config) {
+      delete requestOptions.invocationKwargs.output_config;
+    }
+  }
+
+  const hasActiveThinking = requestOptions.thinking != null;
+  const isThinkingModel =
+    /claude-3[-.]7/.test(mergedOptions.model) || supportsAdaptiveThinking(mergedOptions.model);
+  if (!isThinkingModel || !hasActiveThinking) {
     requestOptions.topP = mergedOptions.topP;
     requestOptions.topK = mergedOptions.topK;
   }

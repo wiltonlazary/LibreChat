@@ -1,5 +1,6 @@
-import { getLLMConfig } from './llm';
+import { AnthropicEffort, ThinkingDisplay } from 'librechat-data-provider';
 import type * as t from '~/types';
+import { getLLMConfig } from './llm';
 
 jest.mock('https-proxy-agent', () => ({
   HttpsProxyAgent: jest.fn().mockImplementation((proxy) => ({ proxy })),
@@ -87,21 +88,18 @@ describe('getLLMConfig', () => {
     expect(result.llmConfig.thinking).toHaveProperty('budget_tokens', 2000);
   });
 
-  it('should add "context-1m" beta header and promptCache boolean for claude-sonnet-4 model', () => {
+  it('should pass promptCache without long-context beta header for claude-sonnet-4 model', () => {
     const modelOptions = {
       model: 'claude-sonnet-4-20250514',
       promptCache: true,
     };
     const result = getLLMConfig('test-key', { modelOptions });
     const clientOptions = result.llmConfig.clientOptions;
-    expect(clientOptions?.defaultHeaders).toBeDefined();
-    expect(clientOptions?.defaultHeaders).toHaveProperty('anthropic-beta');
-    const defaultHeaders = clientOptions?.defaultHeaders as Record<string, string>;
-    expect(defaultHeaders['anthropic-beta']).toBe('context-1m-2025-08-07');
+    expect(clientOptions?.defaultHeaders).toBeUndefined();
     expect(result.llmConfig.promptCache).toBe(true);
   });
 
-  it('should add "context-1m" beta header and promptCache boolean for claude-sonnet-4 model formats', () => {
+  it('should pass promptCache without long-context beta header for claude-sonnet-4 model formats', () => {
     const modelVariations = [
       'claude-sonnet-4-20250514',
       'claude-sonnet-4-latest',
@@ -112,10 +110,34 @@ describe('getLLMConfig', () => {
       const modelOptions = { model, promptCache: true };
       const result = getLLMConfig('test-key', { modelOptions });
       const clientOptions = result.llmConfig.clientOptions;
-      expect(clientOptions?.defaultHeaders).toBeDefined();
-      expect(clientOptions?.defaultHeaders).toHaveProperty('anthropic-beta');
-      const defaultHeaders = clientOptions?.defaultHeaders as Record<string, string>;
-      expect(defaultHeaders['anthropic-beta']).toBe('context-1m-2025-08-07');
+      expect(clientOptions?.defaultHeaders).toBeUndefined();
+      expect(result.llmConfig.promptCache).toBe(true);
+    });
+  });
+
+  it('should pass promptCache without long-context beta header for claude-sonnet-4-6 model', () => {
+    const modelOptions = {
+      model: 'claude-sonnet-4-6',
+      promptCache: true,
+    };
+    const result = getLLMConfig('test-key', { modelOptions });
+    const clientOptions = result.llmConfig.clientOptions;
+    expect(clientOptions?.defaultHeaders).toBeUndefined();
+    expect(result.llmConfig.promptCache).toBe(true);
+  });
+
+  it('should pass promptCache without long-context beta header for claude-sonnet-4-6 model formats', () => {
+    const modelVariations = [
+      'claude-sonnet-4-6',
+      'claude-sonnet-4-6-20260101',
+      'anthropic/claude-sonnet-4-6',
+    ];
+
+    modelVariations.forEach((model) => {
+      const modelOptions = { model, promptCache: true };
+      const result = getLLMConfig('test-key', { modelOptions });
+      const clientOptions = result.llmConfig.clientOptions;
+      expect(clientOptions?.defaultHeaders).toBeUndefined();
       expect(result.llmConfig.promptCache).toBe(true);
     });
   });
@@ -835,13 +857,19 @@ describe('getLLMConfig', () => {
           expect(result.llmConfig.maxTokens).toBe(32000);
         });
 
-        // opus-4-5+ get 64K
-        const opus64kModels = ['claude-opus-4-5', 'claude-opus-4-7', 'claude-opus-4-10'];
-        opus64kModels.forEach((model) => {
+        // opus-4-5 gets 64K
+        const opus64kResult = getLLMConfig('test-key', {
+          modelOptions: { model: 'claude-opus-4-5' },
+        });
+        expect(opus64kResult.llmConfig.maxTokens).toBe(64000);
+
+        // opus-4-6+ get 128K
+        const opus128kModels = ['claude-opus-4-7', 'claude-opus-4-10'];
+        opus128kModels.forEach((model) => {
           const result = getLLMConfig('test-key', {
             modelOptions: { model },
           });
-          expect(result.llmConfig.maxTokens).toBe(64000);
+          expect(result.llmConfig.maxTokens).toBe(128000);
         });
       });
 
@@ -910,6 +938,285 @@ describe('getLLMConfig', () => {
         expect(result.llmConfig.maxTokens).toBe(32000);
       });
 
+      it('should use adaptive thinking for Opus 4.6 instead of enabled + budget_tokens', () => {
+        const result = getLLMConfig('test-key', {
+          modelOptions: {
+            model: 'claude-opus-4-6',
+            thinking: true,
+            thinkingBudget: 10000,
+          },
+        });
+
+        expect((result.llmConfig.thinking as unknown as { type: string }).type).toBe('adaptive');
+        expect(result.llmConfig.thinking).not.toHaveProperty('budget_tokens');
+        expect(result.llmConfig.maxTokens).toBe(128000);
+      });
+
+      it('should set effort via output_config for adaptive thinking models', () => {
+        const result = getLLMConfig('test-key', {
+          modelOptions: {
+            model: 'claude-opus-4-6',
+            thinking: true,
+            effort: AnthropicEffort.medium,
+          },
+        });
+
+        expect((result.llmConfig.thinking as unknown as { type: string }).type).toBe('adaptive');
+        expect(result.llmConfig.invocationKwargs).toHaveProperty('output_config');
+        expect(result.llmConfig.invocationKwargs?.output_config).toEqual({
+          effort: AnthropicEffort.medium,
+        });
+      });
+
+      it('should set effort via output_config even without thinking for adaptive models', () => {
+        const result = getLLMConfig('test-key', {
+          modelOptions: {
+            model: 'claude-opus-4-6',
+            thinking: false,
+            effort: AnthropicEffort.low,
+          },
+        });
+
+        expect(result.llmConfig.thinking).toBeUndefined();
+        expect(result.llmConfig.invocationKwargs).toHaveProperty('output_config');
+        expect(result.llmConfig.invocationKwargs?.output_config).toEqual({
+          effort: AnthropicEffort.low,
+        });
+      });
+
+      it('should use adaptive thinking for Sonnet 4.6 instead of enabled + budget_tokens', () => {
+        const result = getLLMConfig('test-key', {
+          modelOptions: {
+            model: 'claude-sonnet-4-6',
+            thinking: true,
+            thinkingBudget: 10000,
+          },
+        });
+
+        expect((result.llmConfig.thinking as unknown as { type: string }).type).toBe('adaptive');
+        expect(result.llmConfig.thinking).not.toHaveProperty('budget_tokens');
+        expect(result.llmConfig.maxTokens).toBe(64000);
+      });
+
+      it('should set effort via output_config for Sonnet 4.6', () => {
+        const result = getLLMConfig('test-key', {
+          modelOptions: {
+            model: 'claude-sonnet-4-6',
+            thinking: true,
+            effort: AnthropicEffort.high,
+          },
+        });
+
+        expect((result.llmConfig.thinking as unknown as { type: string }).type).toBe('adaptive');
+        expect(result.llmConfig.invocationKwargs).toHaveProperty('output_config');
+        expect(result.llmConfig.invocationKwargs?.output_config).toEqual({
+          effort: AnthropicEffort.high,
+        });
+      });
+
+      it('should set xhigh effort via output_config for Opus 4.7', () => {
+        const result = getLLMConfig('test-key', {
+          modelOptions: {
+            model: 'claude-opus-4-7',
+            thinking: true,
+            effort: 'xhigh' as AnthropicEffort,
+          },
+        });
+
+        expect((result.llmConfig.thinking as unknown as { type: string }).type).toBe('adaptive');
+        expect(result.llmConfig.invocationKwargs?.output_config).toEqual({
+          effort: 'xhigh',
+        });
+      });
+
+      it('should request summarized thinking display for Opus 4.7 (opt back in)', () => {
+        const result = getLLMConfig('test-key', {
+          modelOptions: { model: 'claude-opus-4-7', thinking: true },
+        });
+
+        const thinking = result.llmConfig.thinking as unknown as {
+          type: string;
+          display?: string;
+        };
+        expect(thinking.type).toBe('adaptive');
+        expect(thinking.display).toBe('summarized');
+      });
+
+      it('should NOT set thinking.display for pre-Opus-4.7 adaptive models', () => {
+        const pre47Models = ['claude-opus-4-6', 'claude-sonnet-4-6'];
+
+        pre47Models.forEach((model) => {
+          const result = getLLMConfig('test-key', {
+            modelOptions: { model, thinking: true },
+          });
+
+          const thinking = result.llmConfig.thinking as unknown as {
+            type: string;
+            display?: string;
+          };
+          expect(thinking.type).toBe('adaptive');
+          expect(thinking.display).toBeUndefined();
+        });
+      });
+
+      it('should honor explicit thinkingDisplay="summarized" on Opus 4.6', () => {
+        const result = getLLMConfig('test-key', {
+          modelOptions: {
+            model: 'claude-opus-4-6',
+            thinking: true,
+            thinkingDisplay: ThinkingDisplay.summarized,
+          },
+        });
+
+        const thinking = result.llmConfig.thinking as unknown as {
+          type: string;
+          display?: string;
+        };
+        expect(thinking.type).toBe('adaptive');
+        expect(thinking.display).toBe('summarized');
+      });
+
+      it('should honor explicit thinkingDisplay="omitted" on Opus 4.7', () => {
+        const result = getLLMConfig('test-key', {
+          modelOptions: {
+            model: 'claude-opus-4-7',
+            thinking: true,
+            thinkingDisplay: ThinkingDisplay.omitted,
+          },
+        });
+
+        const thinking = result.llmConfig.thinking as unknown as {
+          type: string;
+          display?: string;
+        };
+        expect(thinking.type).toBe('adaptive');
+        expect(thinking.display).toBe('omitted');
+      });
+
+      it('should recover display from persisted agent thinking object (Opus 4.7 omitted)', () => {
+        /** Agents persist `thinking` as the full Anthropic object. Without
+         * extracting `.display` back into `thinkingDisplay`, Opus 4.7's auto
+         * resolver would silently flip it to 'summarized'. */
+        const result = getLLMConfig('test-key', {
+          modelOptions: {
+            model: 'claude-opus-4-7',
+            thinking: { type: 'adaptive', display: 'omitted' },
+          } as unknown as t.AnthropicModelOptions,
+        });
+
+        const thinking = result.llmConfig.thinking as unknown as {
+          type: string;
+          display?: string;
+        };
+        expect(thinking.type).toBe('adaptive');
+        expect(thinking.display).toBe('omitted');
+      });
+
+      it('explicit thinkingDisplay wins over persisted thinking.display', () => {
+        const result = getLLMConfig('test-key', {
+          modelOptions: {
+            model: 'claude-opus-4-7',
+            thinking: { type: 'adaptive', display: 'summarized' },
+            thinkingDisplay: ThinkingDisplay.omitted,
+          } as unknown as t.AnthropicModelOptions,
+        });
+
+        const thinking = result.llmConfig.thinking as unknown as {
+          type: string;
+          display?: string;
+        };
+        expect(thinking.display).toBe('omitted');
+      });
+
+      it('should exclude topP/topK for Sonnet 4.6 with adaptive thinking', () => {
+        const result = getLLMConfig('test-key', {
+          modelOptions: {
+            model: 'claude-sonnet-4-6',
+            thinking: true,
+            topP: 0.9,
+            topK: 40,
+          },
+        });
+
+        expect((result.llmConfig.thinking as unknown as { type: string }).type).toBe('adaptive');
+        expect(result.llmConfig).not.toHaveProperty('topP');
+        expect(result.llmConfig).not.toHaveProperty('topK');
+      });
+
+      it('should NOT set adaptive thinking or effort for non-adaptive models', () => {
+        const nonAdaptiveModels = [
+          'claude-opus-4-5',
+          'claude-opus-4-1',
+          'claude-sonnet-4-5',
+          'claude-sonnet-4',
+          'claude-haiku-4-5',
+        ];
+
+        nonAdaptiveModels.forEach((model) => {
+          const result = getLLMConfig('test-key', {
+            modelOptions: {
+              model,
+              thinking: true,
+              thinkingBudget: 10000,
+              effort: AnthropicEffort.medium,
+            },
+          });
+
+          if (result.llmConfig.thinking != null) {
+            expect((result.llmConfig.thinking as unknown as { type: string }).type).not.toBe(
+              'adaptive',
+            );
+          }
+          expect(result.llmConfig.invocationKwargs?.output_config).toBeUndefined();
+        });
+      });
+
+      it('should strip adaptive thinking if it somehow reaches a non-adaptive model', () => {
+        const result = getLLMConfig('test-key', {
+          modelOptions: {
+            model: 'claude-sonnet-4-5',
+            thinking: true,
+            thinkingBudget: 5000,
+          },
+        });
+
+        expect(result.llmConfig.thinking).toMatchObject({
+          type: 'enabled',
+          budget_tokens: 5000,
+        });
+        expect(result.llmConfig.invocationKwargs?.output_config).toBeUndefined();
+      });
+
+      it('should exclude topP/topK for Opus 4.6 with adaptive thinking', () => {
+        const result = getLLMConfig('test-key', {
+          modelOptions: {
+            model: 'claude-opus-4-6',
+            thinking: true,
+            topP: 0.9,
+            topK: 40,
+          },
+        });
+
+        expect((result.llmConfig.thinking as unknown as { type: string }).type).toBe('adaptive');
+        expect(result.llmConfig).not.toHaveProperty('topP');
+        expect(result.llmConfig).not.toHaveProperty('topK');
+      });
+
+      it('should include topP/topK for Opus 4.6 when thinking is disabled', () => {
+        const result = getLLMConfig('test-key', {
+          modelOptions: {
+            model: 'claude-opus-4-6',
+            thinking: false,
+            topP: 0.9,
+            topK: 40,
+          },
+        });
+
+        expect(result.llmConfig.thinking).toBeUndefined();
+        expect(result.llmConfig).toHaveProperty('topP', 0.9);
+        expect(result.llmConfig).toHaveProperty('topK', 40);
+      });
+
       it('should respect model-specific maxOutputTokens for Claude 4.x models', () => {
         const testCases = [
           { model: 'claude-sonnet-4-5', maxOutputTokens: 50000, expected: 50000 },
@@ -960,7 +1267,7 @@ describe('getLLMConfig', () => {
         });
       });
 
-      it('should future-proof Claude 5.x Opus models with 64K default', () => {
+      it('should future-proof Claude 5.x Opus models with 128K default', () => {
         const testCases = [
           'claude-opus-5',
           'claude-opus-5-0',
@@ -972,28 +1279,28 @@ describe('getLLMConfig', () => {
           const result = getLLMConfig('test-key', {
             modelOptions: { model },
           });
-          expect(result.llmConfig.maxTokens).toBe(64000);
+          expect(result.llmConfig.maxTokens).toBe(128000);
         });
       });
 
       it('should future-proof Claude 6-9.x models with correct defaults', () => {
         const testCases = [
-          // Claude 6.x - All get 64K since they're version 5+
+          // Claude 6.x - Sonnet/Haiku get 64K, Opus gets 128K
           { model: 'claude-sonnet-6', expected: 64000 },
           { model: 'claude-haiku-6-0', expected: 64000 },
-          { model: 'claude-opus-6-1', expected: 64000 }, // opus 6+ gets 64K
+          { model: 'claude-opus-6-1', expected: 128000 },
           // Claude 7.x
           { model: 'claude-sonnet-7-20270101', expected: 64000 },
           { model: 'claude-haiku-7.5', expected: 64000 },
-          { model: 'claude-opus-7', expected: 64000 }, // opus 7+ gets 64K
+          { model: 'claude-opus-7', expected: 128000 },
           // Claude 8.x
           { model: 'claude-sonnet-8', expected: 64000 },
           { model: 'claude-haiku-8-2', expected: 64000 },
-          { model: 'claude-opus-8-latest', expected: 64000 }, // opus 8+ gets 64K
+          { model: 'claude-opus-8-latest', expected: 128000 },
           // Claude 9.x
           { model: 'claude-sonnet-9', expected: 64000 },
           { model: 'claude-haiku-9', expected: 64000 },
-          { model: 'claude-opus-9', expected: 64000 }, // opus 9+ gets 64K
+          { model: 'claude-opus-9', expected: 128000 },
         ];
 
         testCases.forEach(({ model, expected }) => {
@@ -1166,7 +1473,7 @@ describe('getLLMConfig', () => {
 
       it('should handle prompt cache support logic for different models', () => {
         const testCases = [
-          // Models that support prompt cache (and have other beta headers)
+          // Models that support prompt cache and have other beta headers
           {
             model: 'claude-3-5-sonnet',
             promptCache: true,
@@ -1194,7 +1501,13 @@ describe('getLLMConfig', () => {
           {
             model: 'claude-sonnet-4-20250514',
             promptCache: true,
-            shouldHaveHeaders: true,
+            shouldHaveHeaders: false,
+            shouldHavePromptCache: true,
+          },
+          {
+            model: 'claude-sonnet-4-6',
+            promptCache: true,
+            shouldHaveHeaders: false,
             shouldHavePromptCache: true,
           },
           // Models that support prompt cache but have no additional beta headers needed

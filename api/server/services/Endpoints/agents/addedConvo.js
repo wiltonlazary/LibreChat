@@ -1,12 +1,16 @@
 const { logger } = require('@librechat/data-schemas');
-const { initializeAgent, validateAgentModel } = require('@librechat/api');
-const { loadAddedAgent, setGetAgent, ADDED_AGENT_ID } = require('~/models/loadAddedAgent');
-const { getConvoFiles } = require('~/models/Conversation');
-const { getAgent } = require('~/models/Agent');
+const {
+  ADDED_AGENT_ID,
+  initializeAgent,
+  validateAgentModel,
+  loadAddedAgent: loadAddedAgentFn,
+} = require('@librechat/api');
+const { filterFilesByAgentAccess } = require('~/server/services/Files/permissions');
+const { getMCPServerTools } = require('~/server/services/Config');
 const db = require('~/models');
 
-// Initialize the getAgent dependency
-setGetAgent(getAgent);
+const loadAddedAgent = (params) =>
+  loadAddedAgentFn(params, { getAgent: db.getAgent, getMCPServerTools });
 
 /**
  * Process addedConvo for parallel agent execution.
@@ -31,10 +35,14 @@ setGetAgent(getAgent);
  * @param {Function} params.loadTools - Function to load agent tools
  * @param {Array} params.requestFiles - Request files
  * @param {string} params.conversationId - The conversation ID
+ * @param {string} [params.parentMessageId] - The parent message ID for thread filtering
  * @param {Set} params.allowedProviders - Set of allowed providers
  * @param {Map} params.agentConfigs - Map of agent configs to add to
  * @param {string} params.primaryAgentId - The primary agent ID
  * @param {Object|undefined} params.userMCPAuthMap - User MCP auth map to merge into
+ * @param {boolean} [params.codeEnvAvailable] - `execute_code` capability flag;
+ *   forwarded verbatim to the added agent's `initializeAgent`. @see
+ *   InitializeAgentParams.codeEnvAvailable for full semantics.
  * @returns {Promise<{userMCPAuthMap: Object|undefined}>} The updated userMCPAuthMap
  */
 const processAddedConvo = async ({
@@ -46,22 +54,24 @@ const processAddedConvo = async ({
   loadTools,
   requestFiles,
   conversationId,
+  parentMessageId,
   allowedProviders,
   agentConfigs,
   primaryAgentId,
   primaryAgent,
   userMCPAuthMap,
+  codeEnvAvailable,
 }) => {
   const addedConvo = endpointOption.addedConvo;
-  logger.debug('[processAddedConvo] Called with addedConvo:', {
-    hasAddedConvo: addedConvo != null,
-    addedConvoEndpoint: addedConvo?.endpoint,
-    addedConvoModel: addedConvo?.model,
-    addedConvoAgentId: addedConvo?.agent_id,
-  });
   if (addedConvo == null) {
     return { userMCPAuthMap };
   }
+
+  logger.debug('[processAddedConvo] Processing added conversation', {
+    model: addedConvo.model,
+    agentId: addedConvo.agent_id,
+    endpoint: addedConvo.endpoint,
+  });
 
   try {
     const addedAgent = await loadAddedAgent({ req, conversation: addedConvo, primaryAgent });
@@ -91,17 +101,23 @@ const processAddedConvo = async ({
         loadTools,
         requestFiles,
         conversationId,
+        parentMessageId,
         agent: addedAgent,
         endpointOption,
         allowedProviders,
+        codeEnvAvailable,
       },
       {
-        getConvoFiles,
         getFiles: db.getFiles,
         getUserKey: db.getUserKey,
+        getMessages: db.getMessages,
+        getConvoFiles: db.getConvoFiles,
         updateFilesUsage: db.updateFilesUsage,
+        getUserCodeFiles: db.getUserCodeFiles,
         getUserKeyValues: db.getUserKeyValues,
         getToolFilesByIds: db.getToolFilesByIds,
+        getCodeGeneratedFiles: db.getCodeGeneratedFiles,
+        filterFilesByAgentAccess,
       },
     );
 
